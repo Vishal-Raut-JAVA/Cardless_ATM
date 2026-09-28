@@ -1,35 +1,48 @@
 name: Build APK
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+
       - name: Create Android project files
         run: flutter create --platforms=android --org com.demo --project-name cardless_atm .
+
       - name: Patch Android settings
         run: |
           M=android/app/src/main/AndroidManifest.xml
-          sed -i 's#<application#<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>\n    <application#' $M
-          sed -i 's/android:label="[^"]*"/android:label="Cardless ATM"/' $M
+
+          sed -i 's#<application#<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>\n    <application#' "$M"
+
+          sed -i 's/android:label="[^"]*"/android:label="Cardless ATM"/' "$M"
+
           K=$(find android/app/src/main -name 'MainActivity.*' | head -n 1)
-          sed -i 's/FlutterActivity/FlutterFragmentActivity/g' $K
-          for f in android/app/src/main/res/values*/styles.xml; do
-            sed -i 's/Theme.Light.NoTitleBar/Theme.AppCompat.Light.NoActionBar/; s/Theme.Black.NoTitleBar/Theme.AppCompat.NoActionBar/' $f
-          done
+          sed -i 's/FlutterActivity/FlutterFragmentActivity/g' "$K"
+
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle*
-      - run: flutter pub get
-      - run: flutter build apk --release
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
       - uses: actions/upload-artifact@v4
         with:
           name: cardless-atm-apk
