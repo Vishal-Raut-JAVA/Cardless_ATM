@@ -1,0 +1,15 @@
+name: cardless_atm
+description: Cardless ATM demo with face and fingerprint login
+publish_to: none
+version: 1.0.0+1
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  camera: ^0.11.0+2
+  local_auth: ^2.3.0
+  google_mlkit_face_detection: ^0.11.0
+  shared_preferences: ^2.3.0
+flutter:
+  uses-material-design: true
