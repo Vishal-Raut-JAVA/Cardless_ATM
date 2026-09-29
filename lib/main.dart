@@ -15,7 +15,6 @@ late SharedPreferences prefs;
 late List<CameraDescription> cams;
 
 Map<String, dynamic> db = {};
-int fails = 0;
 
 void seedDb() {
   if (db.isNotEmpty) return;
@@ -129,7 +128,8 @@ List<double>? faceSignature(Face face) {
   final roll = face.headEulerAngleZ ?? 0.0;
 
   // Don't accept a face that is turned too far.
-  if (yaw.abs() > 25 || roll.abs() > 25) {
+  // (Loosened from 25 to 35 degrees - phone selfie angles vary a lot.)
+  if (yaw.abs() > 35 || roll.abs() > 35) {
     return null;
   }
 
@@ -137,8 +137,8 @@ List<double>? faceSignature(Face face) {
 
   // Normalized values make the signature independent of camera resolution.
   final normalizedAspect = aspectRatio.clamp(0.50, 1.20);
-  final normalizedYaw = (yaw / 25.0).clamp(-1.0, 1.0);
-  final normalizedRoll = (roll / 25.0).clamp(-1.0, 1.0);
+  final normalizedYaw = (yaw / 35.0).clamp(-1.0, 1.0);
+  final normalizedRoll = (roll / 35.0).clamp(-1.0, 1.0);
 
   // Optional classification values.
   // They are not required, because ML Kit may return null.
@@ -181,7 +181,7 @@ bool sameFace(List<double> registered, List<double> current) {
 
   final difference = _difference(registered, current);
 
-  return difference <= 0.30;
+  return difference <= 0.35;
 }
 
 void msg(BuildContext context, String text) {
@@ -449,23 +449,34 @@ class _MobilePageState extends State<MobilePage> {
     final user = findUser(mobile);
 
     if (widget.register) {
-      if (user != null) {
+      // FIX: only block registration if this account is ALREADY fully
+      // registered (face AND fingerprint both saved). Previously this
+      // blocked every pre-seeded demo number immediately, since seeded
+      // accounts already "exist" in the database with face/fp still empty.
+      final alreadyRegistered =
+          user != null && user['face'] != null && user['fp'] == true;
+
+      if (alreadyRegistered) {
         setState(() => loading = false);
-        msg(context, 'Demo account already exists.');
+        msg(context, 'This number is already registered. Please login.');
         return;
       }
 
-      // Create a demo account for an unknown mobile number.
-      db[mobile] = {
-        'name': 'Demo User',
-        'bank': 'Demo Bank',
-        'balance': 25000.0,
-        'face': null,
-        'fp': false,
-        'tx': <Map<String, dynamic>>[],
-      };
-
-      await saveDb();
+      if (user == null) {
+        // Unknown number: create a blank demo account for it.
+        db[mobile] = {
+          'name': 'Demo User',
+          'bank': 'Demo Bank',
+          'balance': 25000.0,
+          'face': null,
+          'fp': false,
+          'tx': <Map<String, dynamic>>[],
+        };
+        await saveDb();
+      }
+      // If the number already exists (a seeded demo account) but isn't
+      // fully registered yet, we simply continue below to OTP and
+      // biometric setup, using the existing account as-is.
 
       if (!mounted) return;
 
@@ -887,11 +898,16 @@ class _FacePageState extends State<FacePage> {
 
       setState(() {
         loading = false;
-        hint = 'Camera could not be started. Please try again.';
+        hint = 'Camera could not be started: $e';
       });
     }
   }
 
+  // FIX: previously the FaceDetector was closed once on the success path
+  // AND again in the "finally" block below - closing it twice. That can
+  // throw a hidden error after a face was already detected. Now the
+  // detector is created fresh each scan and closed exactly once, in
+  // "finally", no matter which path is taken.
   Future<void> scanFace() async {
     if (scanning) return;
 
@@ -911,13 +927,14 @@ class _FacePageState extends State<FacePage> {
 
     final detector = FaceDetector(
       options: FaceDetectorOptions(
-        enableLandmarks: false,
         enableClassification: true,
-        enableTracking: false,
         performanceMode: FaceDetectorMode.accurate,
         minFaceSize: 0.10,
       ),
     );
+
+    List<double>? signature;
+    String? failureHint;
 
     try {
       final XFile picture = await controller.takePicture();
@@ -927,60 +944,46 @@ class _FacePageState extends State<FacePage> {
       }
 
       final inputImage = InputImage.fromFilePath(picture.path);
-
       final faces = await detector.processImage(inputImage);
 
-      if (!mounted) return;
-
       if (faces.isEmpty) {
-        setState(() {
-          scanning = false;
-          hint = 'No face detected. Move closer and try again.';
-        });
-        return;
+        failureHint = 'No face detected. Move closer and try again.';
+      } else if (faces.length > 1) {
+        failureHint = 'Only one face should be visible.';
+      } else {
+        signature = faceSignature(faces.first);
+        if (signature == null) {
+          failureHint = 'Face is not clear. Look straight and try again.';
+        }
       }
-
-      if (faces.length > 1) {
-        setState(() {
-          scanning = false;
-          hint = 'Only one face should be visible.';
-        });
-        return;
-      }
-
-      final detectedFace = faces.first;
-
-      final signature = faceSignature(detectedFace);
-
-      if (signature == null) {
-        setState(() {
-          scanning = false;
-          hint = 'Face is not clear. Look straight and try again.';
-        });
-        return;
-      }
-
-      setState(() {
-        hint = 'Face detected successfully';
-      });
-
-      await detector.close();
-
-      if (!mounted) return;
-
-      await widget.onResult(signature);
     } catch (e, stack) {
       debugPrint('FACE SCAN ERROR: $e');
       debugPrint('$stack');
-
-      if (!mounted) return;
-
-      setState(() {
-        scanning = false;
-        hint = 'Could not read the face. Try again.';
-      });
+      // Showing the real error on screen (temporary) so we can see
+      // exactly what's failing if this happens again.
+      failureHint = 'Could not read the face: $e';
     } finally {
       await detector.close();
+    }
+
+    if (!mounted) return;
+
+    if (signature == null) {
+      setState(() {
+        scanning = false;
+        hint = failureHint ?? 'Face is not clear. Try again.';
+      });
+      return;
+    }
+
+    setState(() {
+      hint = 'Face detected successfully';
+    });
+
+    await widget.onResult(signature);
+
+    if (mounted) {
+      setState(() => scanning = false);
     }
   }
 
