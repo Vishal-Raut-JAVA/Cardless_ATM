@@ -36,13 +36,30 @@ jobs:
           sed -i 's/FlutterActivity/FlutterFragmentActivity/g' "$K"
 
           # REQUIRED FIX: local_auth's fingerprint prompt needs the activity to use
-          # an AppCompat-derived theme once MainActivity extends FlutterFragmentActivity.
-          # Without this, the app crashes at the fingerprint step with:
-          # "You need to use a Theme.AppCompat theme (or descendant) with this activity."
+          # an AppCompat theme once MainActivity extends FlutterFragmentActivity.
+          # FIX (previous bug): AppCompat themes live under "@style/", NOT
+          # "android:style/". The old sed kept the "android:" prefix, producing
+          # the invalid "android:style/Theme.AppCompat..." which AAPT rejected.
           for f in android/app/src/main/res/values*/styles.xml; do
             [ -f "$f" ] || continue
-            sed -i 's/Theme\.Light\.NoTitleBar/Theme.AppCompat.Light.NoActionBar/g; s/Theme\.Black\.NoTitleBar/Theme.AppCompat.NoActionBar/g' "$f"
+            sed -i \
+              -e 's#android:style/Theme\.Light\.NoTitleBar#@style/Theme.AppCompat.Light.NoActionBar#g' \
+              -e 's#android:style/Theme\.Black\.NoTitleBar#@style/Theme.AppCompat.NoActionBar#g' \
+              -e 's#@android:style/Theme\.Light\.NoTitleBar#@style/Theme.AppCompat.Light.NoActionBar#g' \
+              -e 's#@android:style/Theme\.Black\.NoTitleBar#@style/Theme.AppCompat.NoActionBar#g' \
+              "$f"
           done
+
+          # Make sure the AppCompat library is actually available to link against.
+          G=android/app/build.gradle
+          [ -f "$G" ] || G=android/app/build.gradle.kts
+          if ! grep -q "androidx.appcompat:appcompat" "$G"; then
+            if [ "$G" = "android/app/build.gradle" ]; then
+              sed -i "/dependencies {/a\\    implementation 'androidx.appcompat:appcompat:1.6.1'" "$G"
+            else
+              sed -i '/dependencies {/a\    implementation("androidx.appcompat:appcompat:1.6.1")' "$G"
+            fi
+          fi
 
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle*
 
