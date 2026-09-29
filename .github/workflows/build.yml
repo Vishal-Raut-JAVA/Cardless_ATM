@@ -63,6 +63,22 @@ jobs:
 
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle*
 
+          # Safety net: keep ML Kit's internal classes intact in case anything
+          # gets stripped/renamed during the release build. This does not
+          # change your app's behaviour if this wasn't the cause of the crash.
+          mkdir -p android/app
+          cat >> android/app/proguard-rules.pro <<'PGEOF'
+          -keep class com.google.mlkit.** { *; }
+          -keep class com.google.android.gms.internal.mlkit_vision_face_detection.** { *; }
+          -keep class com.google.android.gms.internal.mlkit_vision_common.** { *; }
+          -dontwarn com.google.mlkit.**
+          PGEOF
+
+          # NOTE: we do NOT force minifyEnabled on here. This project builds
+          # with minification off by default, which is safer for a demo -
+          # the proguard-rules.pro file above only matters if minification
+          # is ever turned on later, and does nothing while it's off.
+
       - name: Get dependencies
         run: flutter pub get
 
