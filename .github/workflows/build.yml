@@ -35,6 +35,15 @@ jobs:
           K=$(find android/app/src/main -name 'MainActivity.*' | head -n 1)
           sed -i 's/FlutterActivity/FlutterFragmentActivity/g' "$K"
 
+          # REQUIRED FIX: local_auth's fingerprint prompt needs the activity to use
+          # an AppCompat-derived theme once MainActivity extends FlutterFragmentActivity.
+          # Without this, the app crashes at the fingerprint step with:
+          # "You need to use a Theme.AppCompat theme (or descendant) with this activity."
+          for f in android/app/src/main/res/values*/styles.xml; do
+            [ -f "$f" ] || continue
+            sed -i 's/Theme\.Light\.NoTitleBar/Theme.AppCompat.Light.NoActionBar/g; s/Theme\.Black\.NoTitleBar/Theme.AppCompat.NoActionBar/g' "$f"
+          done
+
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle*
 
       - name: Get dependencies
