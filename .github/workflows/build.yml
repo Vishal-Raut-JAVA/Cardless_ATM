@@ -26,20 +26,62 @@ jobs:
 
       - name: Patch Android settings
         run: |
+          set -e
           M=android/app/src/main/AndroidManifest.xml
 
-          sed -i 's#<application#<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>\n    <application#' "$M"
+          sed -i 's#<application#<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>\n    <uses-permission android:name="android.permission.SEND_SMS"/>\n    <uses-feature android:name="android.hardware.telephony" android:required="false"/>\n    <application#' "$M"
 
           sed -i 's/android:label="[^"]*"/android:label="Cardless ATM"/' "$M"
 
+          # Overwrite MainActivity completely with a known-good version:
+          # extends FlutterFragmentActivity (required by local_auth's fingerprint
+          # prompt) AND exposes a small native SMS-sending channel, built only
+          # on Android's own SmsManager - no third-party SMS package involved.
           K=$(find android/app/src/main -name 'MainActivity.*' | head -n 1)
-          sed -i 's/FlutterActivity/FlutterFragmentActivity/g' "$K"
+          cat > "$K" <<'KOTLIN'
+          package com.demo.cardless_atm
 
-          # REQUIRED FIX: local_auth's fingerprint prompt needs the activity to use
-          # an AppCompat theme once MainActivity extends FlutterFragmentActivity.
-          # FIX (previous bug): AppCompat themes live under "@style/", NOT
-          # "android:style/". The old sed kept the "android:" prefix, producing
-          # the invalid "android:style/Theme.AppCompat..." which AAPT rejected.
+          import android.telephony.SmsManager
+          import io.flutter.embedding.android.FlutterFragmentActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+
+          class MainActivity : FlutterFragmentActivity() {
+              private val CHANNEL = "cardless_atm/sms"
+
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                  super.configureFlutterEngine(flutterEngine)
+                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+                      .setMethodCallHandler { call, result ->
+                          if (call.method == "sendSms") {
+                              val phone = call.argument<String>("phone")
+                              val message = call.argument<String>("message")
+                              if (phone.isNullOrBlank() || message.isNullOrBlank()) {
+                                  result.error("BAD_ARGS", "Phone or message missing", null)
+                                  return@setMethodCallHandler
+                              }
+                              try {
+                                  val smsManager = SmsManager.getDefault()
+                                  val parts = smsManager.divideMessage(message)
+                                  if (parts.size > 1) {
+                                      smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+                                  } else {
+                                      smsManager.sendTextMessage(phone, null, message, null, null)
+                                  }
+                                  result.success(true)
+                              } catch (e: Exception) {
+                                  result.error("SEND_FAILED", e.message ?: "Unknown error sending SMS", null)
+                              }
+                          } else {
+                              result.notImplemented()
+                          }
+                      }
+              }
+          }
+          KOTLIN
+
+          # REQUIRED FIX (from last build): AppCompat themes live under "@style/",
+          # NOT "android:style/".
           for f in android/app/src/main/res/values*/styles.xml; do
             [ -f "$f" ] || continue
             sed -i \
@@ -50,22 +92,7 @@ jobs:
               "$f"
           done
 
-          # Make sure the AppCompat library is actually available to link against.
-          G=android/app/build.gradle
-          [ -f "$G" ] || G=android/app/build.gradle.kts
-          if ! grep -q "androidx.appcompat:appcompat" "$G"; then
-            if [ "$G" = "android/app/build.gradle" ]; then
-              sed -i "/dependencies {/a\\    implementation 'androidx.appcompat:appcompat:1.6.1'" "$G"
-            else
-              sed -i '/dependencies {/a\    implementation("androidx.appcompat:appcompat:1.6.1")' "$G"
-            fi
-          fi
-
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle*
-
-          # Safety net: keep ML Kit's internal classes intact in case anything
-          # gets stripped/renamed during the release build. This does not
-          # change your app's behaviour if this wasn't the cause of the crash.
+          # Safety net proguard rules (inert unless minification is ever turned on).
           mkdir -p android/app
           cat >> android/app/proguard-rules.pro <<'PGEOF'
           -keep class com.google.mlkit.** { *; }
@@ -74,10 +101,15 @@ jobs:
           -dontwarn com.google.mlkit.**
           PGEOF
 
-          # NOTE: we do NOT force minifyEnabled on here. This project builds
-          # with minification off by default, which is safer for a demo -
-          # the proguard-rules.pro file above only matters if minification
-          # is ever turned on later, and does nothing while it's off.
+          # minSdk 24 (required by local_auth/camera), and compileSdk 35
+          # (required by google_mlkit_face_detection 0.13+) - pinned explicitly
+          # so a Flutter template default can't silently fall short again.
+          sed -i \
+            -e 's/minSdk = flutter.minSdkVersion/minSdk = 24/' \
+            -e 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' \
+            -e 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/' \
+            -e 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 35/' \
+            android/app/build.gradle*
 
       - name: Get dependencies
         run: flutter pub get
