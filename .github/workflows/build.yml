@@ -101,14 +101,15 @@ jobs:
           -dontwarn com.google.mlkit.**
           PGEOF
 
-          # minSdk 24 (required by local_auth/camera), and compileSdk 35
-          # (required by google_mlkit_face_detection 0.13+) - pinned explicitly
+          # minSdk 24 (required by local_auth/camera), and compileSdk 36
+          # (required by camera_android_camerax / local_auth_android /
+          # google_mlkit_* as of their current releases) - pinned explicitly
           # so a Flutter template default can't silently fall short again.
           sed -i \
             -e 's/minSdk = flutter.minSdkVersion/minSdk = 24/' \
             -e 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' \
-            -e 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/' \
-            -e 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 35/' \
+            -e 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' \
+            -e 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/' \
             android/app/build.gradle*
 
       - name: Get dependencies
